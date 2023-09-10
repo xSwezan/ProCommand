@@ -11,6 +11,8 @@ local HasSemicolon = require(script.Parent.Parent.Util.HasSemicolon)
 local IsCommandString = require(script.Parent.Parent.Util.IsCommandString)
 local GetCurrentCommandIndex = require(script.Parent.Parent.Util.GetCurrentCommandIndex)
 local GetCurrentArgumentIndex = require(script.Parent.Parent.Util.GetCurrentArgumentIndex)
+local LevenshteinDistance = require(script.Parent.Parent.Util.LevenshteinDistance)
+local Types = require(script.Parent.Parent.Types)
 
 local e = Fusion.New
 local Children = Fusion.Children
@@ -60,8 +62,10 @@ return function(props: Props)
 
 	-- 	return NewSplit[Index]
 	-- end)
+
 	local CurrentCommandArgument: FusionTypes.Value<{string}?> = Computed(function()
 		local Split = SplitText:get()
+		if not (Split) then return end
 
 		local CurrentArgumentIndex: number, Split: {} = GetCurrentArgumentIndex(Split, CursorPosition:get())
 		if not (CurrentArgumentIndex) then return end
@@ -79,6 +83,7 @@ return function(props: Props)
 
 	local CurrentCommand: FusionTypes.StateObject<{Command: {}?, ArgumentIndex: number}> = Computed(function()
 		local Split = SplitText:get()
+		if not (Split) then return end
 
 		local CurrentArgumentIndex: number, Split: {} = GetCurrentArgumentIndex(Split, CursorPosition:get())
 		if not (CurrentArgumentIndex) then return end
@@ -89,7 +94,65 @@ return function(props: Props)
 		if not (CommandIndex) then return end
 		if not (Split[CommandIndex]) then return end
 
-		return Registered.Commands[Split[CommandIndex].Text or ""]
+		local Name: string = string.lower(Split[CommandIndex].Text or "")
+		for ThisName: string, Command in Registered.Commands do
+			if (string.lower(ThisName) ~= Name) then continue end
+
+			return Command
+		end
+	end)
+
+	local CurrentAutocomplete = Computed(function()
+		local Split = SplitText:get()
+		if not (Split) then return end
+
+		local CurrentArgumentIndex: number, Split: {} = GetCurrentArgumentIndex(Split, CursorPosition:get())
+		if not (CurrentArgumentIndex) then return end
+		if not (Split) then return end
+
+		local RawArgument = Split[CurrentArgumentIndex]
+		if not (RawArgument) then return end
+
+		local AutocompletePool = {}
+
+		local CommandIndex: number = GetCurrentCommandIndex(Split, CurrentArgumentIndex)
+		local CommandObject: Types.CommandInfo = Registered.Commands[(Split[CommandIndex or 0] or {}).Text or ""]
+		if (CommandIndex == CurrentArgumentIndex) then
+			AutocompletePool = Registered.Commands
+		elseif (CommandObject) then
+			local ArgumentType: Types.TypeInfo = Registered.Types[CommandObject.Arguments[CurrentArgumentIndex - 1][1]]
+			warn(ArgumentType)
+			AutocompletePool = ArgumentType:Get(Split[CurrentArgumentIndex].Text)
+		end
+
+		print("RawArgument:", RawArgument)
+
+		-- Get Autocompletes
+		local Autocompletes: {[number]: {number & string}} = {}
+		
+		local RawText: string = string.lower(RawArgument.Raw)
+		for Name: string, Entry: {Name: string} in AutocompletePool do
+			local Distance: number = LevenshteinDistance(RawText, string.lower(Entry.Name))
+			if (Distance >= #Entry.Name) then continue end
+
+			table.insert(Autocompletes, {Distance, Name})
+		end
+
+		table.sort(Autocompletes,function(a, b)
+			return (a[1] > b[1])
+		end)
+
+		-- Get closest Autocomplete
+		local RawAutocomplete = Autocompletes[1]
+		if not (RawAutocomplete) then return end
+
+		local Autocomplete = AutocompletePool[RawAutocomplete]
+		if not (Autocomplete) then return end
+
+		local Text = Autocomplete.Text
+		Text = `{string.rep(" ", Autocomplete.Start)}{Text}`
+
+		return Text
 	end)
 
 	local TextBoxAbsolutePosition = Value(Vector2.new())
@@ -219,6 +282,8 @@ return function(props: Props)
 					CursorPosition = -1;
 					ClearTextOnFocus = false;
 
+					ZIndex = 2;
+
 					[OnEvent("Focused")] = function()
 						Focused:set(true)
 					end;
@@ -229,6 +294,24 @@ return function(props: Props)
 					[Out("AbsolutePosition")] = TextBoxAbsolutePosition;
 					[Out("CursorPosition")] = CursorPosition;
 					[Out("Text")] = Text;
+				};
+				e("TextLabel"){
+					Name = "AutoComplete";
+
+					Size = UDim2.new(1,-30,0,30);
+
+					Position = UDim2.fromScale(1,.5);
+					AnchorPoint = Vector2.new(1,.5);
+
+					BackgroundTransparency = 1;
+
+					FontFace = TextParams.Font;
+					Text = Computed(function()
+						return CurrentAutocomplete:get() or ""
+					end);
+					TextColor3 = Color3.fromRGB(100,100,100);
+					TextSize = TextParams.Size;
+					TextXAlignment = Enum.TextXAlignment.Left;
 				};
 			};
 		}
